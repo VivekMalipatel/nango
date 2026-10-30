@@ -299,7 +299,7 @@ export class OrchestratorClient {
                 maxAttempts: 1000,
                 maxWaitMs: Infinity,
                 delayMs: 100,
-                retryIf: (res) => 'error' in res && Date.now() < retryUntil
+                retryIf: (res) => ('error' in res || res.state === 'CREATED' || res.state === 'STARTED') && Date.now() < retryUntil
             }
         })({ params: { taskId }, query: { longPolling: 30_000 } });
 

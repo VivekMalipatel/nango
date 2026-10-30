@@ -110,6 +110,34 @@ describe('Scheduler', () => {
         (await scheduler.fail({ taskId: task.id, error: { message: 'failure happened' } })).unwrap();
         expect(callbacks.FAILED).toHaveBeenCalledOnce();
     });
+    it('should call the FAILED callback only once the failure is visible to other connections', async () => {
+        const name = `slow-commit-${nanoid()}`;
+        await dbClient.db.raw(`
+            CREATE OR REPLACE FUNCTION slow_failed_commit() RETURNS trigger AS $$
+            BEGIN
+                PERFORM pg_sleep(0.5);
+                RETURN NULL;
+            END;
+            $$ LANGUAGE plpgsql;
+            CREATE CONSTRAINT TRIGGER slow_failed_commit AFTER UPDATE ON tasks
+            DEFERRABLE INITIALLY DEFERRED FOR EACH ROW
+            WHEN (NEW.state = 'FAILED' AND NEW.name = '${name}')
+            EXECUTE FUNCTION slow_failed_commit();
+        `);
+        try {
+            const task = await immediate(scheduler, { taskProps: { name } });
+            (await scheduler.dequeue({ groupKeyPattern: task.groupKey, limit: 1 })).unwrap();
+            let stateSeenByCallback: Promise<string | undefined> | undefined;
+            callbacks.FAILED.mockImplementation((failed: Task) => {
+                stateSeenByCallback = scheduler.get({ taskId: failed.id }).then((res) => (res.isOk() ? res.value.state : undefined));
+            });
+            (await scheduler.fail({ taskId: task.id, error: { message: 'failure happened' } })).unwrap();
+            expect(callbacks.FAILED).toHaveBeenCalledOnce();
+            expect(await stateSeenByCallback).toBe('FAILED');
+        } finally {
+            await dbClient.db.raw('DROP TRIGGER IF EXISTS slow_failed_commit ON tasks; DROP FUNCTION IF EXISTS slow_failed_commit();');
+        }
+    });
     it('should call callback when task is succeeded', async () => {
         const task = await immediate(scheduler);
         (await scheduler.dequeue({ groupKeyPattern: task.groupKey, limit: 1 })).unwrap();

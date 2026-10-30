@@ -466,3 +466,46 @@ describe('OrchestratorClient executeWebhook', () => {
         expect(fetchMock).toHaveBeenCalledOnce();
     });
 });
+
+describe('OrchestratorClient executeAction', () => {
+    afterEach(() => {
+        vi.restoreAllMocks();
+        vi.unstubAllGlobals();
+    });
+
+    it('polls the output again when the long poll answers before the task reaches a final state', async () => {
+        const failure = { name: 'action_script_runtime_error', message: 'upstream rejected the request', payload: { status: 422 } };
+        const json = { status: 200, headers: { 'content-type': 'application/json' } };
+        const fetchMock = vi
+            .fn()
+            .mockResolvedValueOnce(new Response(JSON.stringify({ taskId: 'task-1', retryKey: 'retry-key-1' }), json))
+            .mockResolvedValueOnce(new Response(JSON.stringify({ state: 'STARTED', output: null }), json))
+            .mockResolvedValueOnce(new Response(JSON.stringify({ state: 'FAILED', output: failure }), json));
+        vi.stubGlobal('fetch', fetchMock);
+
+        const client = new OrchestratorClient({ baseUrl: 'http://orchestrator.test' });
+        const res = await client.executeAction({
+            name: 'task-1',
+            group: { key: 'group-1', maxConcurrency: 0 },
+            args: {
+                actionName: 'action-1',
+                connection: {
+                    id: 123,
+                    connection_id: 'connection-1',
+                    provider_config_key: 'provider-config-key-1',
+                    environment_id: 456
+                },
+                activityLogId: 'activity-log-1',
+                input: { foo: 'bar' },
+                async: false
+            }
+        });
+
+        expect(res.isErr()).toBe(true);
+        if (res.isErr()) {
+            expect(res.error.name).toBe('task_failed_error');
+            expect(res.error.payload).toEqual(failure);
+        }
+        expect(fetchMock).toHaveBeenCalledTimes(3);
+    });
+});

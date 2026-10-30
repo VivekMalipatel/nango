@@ -514,7 +514,7 @@ export class Scheduler {
         nextExecutionInMs?: number | undefined;
     }): Promise<Result<Task>> {
         const newState: TaskState = 'FAILED';
-        return await this.db.transaction(async (trx) => {
+        const result: Result<Task> = await this.db.transaction(async (trx) => {
             const task = await tasks.get(trx, taskId);
             if (task.isErr()) {
                 return Err(`fail: Error fetching task '${taskId}': ${stringifyError(task.error)}`);
@@ -539,7 +539,6 @@ export class Scheduler {
                     }
                 }
                 const task = failed.value;
-                this.onCallbacks[task.state](task);
                 // Create a new task if the task is retryable
                 if (task.retryMax > task.retryCount) {
                     const taskProps: ImmediateProps = {
@@ -563,6 +562,11 @@ export class Scheduler {
             }
             return failed;
         });
+        if (result.isOk()) {
+            const task = result.value;
+            this.onCallbacks[task.state](task);
+        }
+        return result;
     }
 
     /**
